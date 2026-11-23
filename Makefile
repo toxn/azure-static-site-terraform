@@ -18,7 +18,7 @@ BACKEND_CONFIG := \
 	-backend-config="container_name=$(STATE_CONTAINER)" \
 	-backend-config="key=$(STATE_KEY)"
 
-.PHONY: help bootstrap init fmt validate plan apply destroy output site-url check clean
+.PHONY: help bootstrap init fmt validate test plan apply destroy output site-url serve check clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -36,12 +36,20 @@ init: ## Initialise the infra stack against the remote backend
 fmt: ## Format all Terraform code
 	$(TF) fmt -recursive
 
-check: ## Format check + validate (what CI runs first)
+check: ## Everything CI runs before touching Azure (fmt, validate, test)
 	$(TF) fmt -check -recursive -diff
 	$(TF) -chdir=$(INFRA) validate
 	$(TF) -chdir=$(BOOTSTRAP) validate
+	$(TF) -chdir=$(INFRA) test
 
 validate: check ## Alias for check
+
+test: ## Offline tests: plans with mocked providers, no credentials needed
+	$(TF) -chdir=$(INFRA) test
+
+serve: ## Preview the site at http://localhost:8080
+	@echo "Serving site/ on http://localhost:8080 (Ctrl+C to stop)"
+	python3 -m http.server --directory site 8080
 
 plan: init ## Show the plan
 	$(TF) -chdir=$(INFRA) plan -input=false -lock-timeout=5m -out=tfplan

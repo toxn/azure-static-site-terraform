@@ -56,6 +56,9 @@ jobs:
           terraform -chdir=bootstrap init -backend=false -input=false -no-color
           terraform -chdir=bootstrap validate -no-color
 
+      - name: terraform test (mocked providers, no Azure calls)
+        run: terraform -chdir=infra test -no-color
+
   # ---------------------------------------------------------------------------
   # 2. Plan. Runs on PRs (as a comment) and on main (as an artifact to apply).
   #    Fork PRs are skipped: they would receive an OIDC token with the same

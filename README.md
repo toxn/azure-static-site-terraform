@@ -54,6 +54,7 @@ already have everything you need.
 │   ├── providers.tf           # backend "azurerm" {} configured at runtime
 │   ├── variables.tf
 │   ├── outputs.tf
+│   ├── tests/infra.tftest.hcl # offline tests with mocked providers
 │   └── modules/static_web_app/
 ├── site/                      # the actual website
 │   ├── index.html
@@ -177,10 +178,33 @@ distinguish a fork from a trusted branch.
 
 ---
 
+## Run it without Azure
+
+You do not need a subscription to exercise most of this repository.
+
+| Command       | What it proves                                                    | Azure needed? |
+| ------------- | ----------------------------------------------------------------- | ------------- |
+| `make check`  | formatting, provider schema, variable validation, offline tests     | no            |
+| `make test`   | the whole graph plans, and naming/outputs/validation are correct   | no            |
+| `make serve`  | the site renders at <http://localhost:8080>                        | no            |
+| `make init`   | the backend exists and state locking works                         | yes           |
+| `make plan`   | what would change in your subscription                             | yes           |
+| `make apply`  | the change actually happens                                        | yes           |
+
+`infra/tests/infra.tftest.hcl` uses Terraform's `mock_provider`, so the Azure
+provider is replaced with one that returns generated values. The entire module
+graph is planned in about a second, and assertions check the naming scheme, the
+outputs and the input validation — no credentials, no network calls to Azure.
+CI runs the same file on every push.
+
+---
+
 ## Local development
 
 ```bash
 make help          # list targets
+make check         # fmt + validate + offline tests (no Azure)
+make serve         # preview the site at http://localhost:8080
 make bootstrap     # one-time setup (same as scripts/bootstrap.sh)
 make init          # init against the remote backend (reads bootstrap outputs)
 make plan          # plan
@@ -189,11 +213,8 @@ make site-url      # print the live URL
 make destroy       # destroy the app stack (state + bootstrap resources survive)
 ```
 
-Preview the site with any static server:
-
-```bash
-python3 -m http.server --directory site 8080
-```
+`make serve` is just `python3 -m http.server --directory site 8080` — the site is
+plain HTML/CSS/JS with no build step, so what you see locally is what deploys.
 
 ---
 
