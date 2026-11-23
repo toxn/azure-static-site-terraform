@@ -95,7 +95,7 @@ jobs:
           terraform -chdir=infra show -no-color tfplan > infra/plan.txt
 
       - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tfplan
           path: |
