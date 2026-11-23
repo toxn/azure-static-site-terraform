@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars for local runs. CI passes these through instead.
+# terraform.tfvars is git-ignored.
+
+project     = "demo"
+environment = "prod"
+location    = "eastus2"
+sku_tier    = "Free"
+
+# resource_group_name = "rg-demo"
+# custom_domain       = "www.example.com"

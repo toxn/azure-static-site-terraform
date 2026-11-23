@@ -1,0 +1,234 @@
+name: pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only what each job needs. `id-token: write` is what makes OIDC possible:
+# it lets the job request a short-lived token from GitHub's issuer.
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+# Never cancel a run that might be halfway through `terraform apply`.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: 1.17.2
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Static checks: no Azure credentials required.
+  # ---------------------------------------------------------------------------
+  validate:
+    name: fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (infra)
+        run: |
+          terraform -chdir=infra init -backend=false -input=false -no-color
+          terraform -chdir=infra validate -no-color
+
+      - name: terraform validate (bootstrap)
+        run: |
+          terraform -chdir=bootstrap init -backend=false -input=false -no-color
+          terraform -chdir=bootstrap validate -no-color
+
+  # ---------------------------------------------------------------------------
+  # 2. Plan. Runs on PRs (as a comment) and on main (as an artifact to apply).
+  #    Fork PRs are skipped: they would receive an OIDC token with the same
+  #    `pull_request` subject as a trusted PR, so we do not hand one out.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: terraform plan
+    needs: validate
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init
+        run: |
+          terraform -chdir=infra init -input=false -no-color \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TF_STATE_KEY || 'app.tfstate' }}"
+
+      - name: terraform plan
+        run: |
+          terraform -chdir=infra plan -input=false -no-color -lock-timeout=5m -out=tfplan
+          terraform -chdir=infra show -no-color tfplan > infra/plan.txt
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: |
+            infra/tfplan
+            infra/plan.txt
+          retention-days: 5
+          if-no-files-found: error
+
+      - name: Comment plan on pull request
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- terraform-plan -->';
+            const path = 'infra/plan.txt';
+
+            let body;
+            if (fs.existsSync(path)) {
+              let plan = fs.readFileSync(path, 'utf8').trim() || '(no changes)';
+              if (plan.length > 60000) plan = plan.slice(0, 60000) + '\n\n... output truncated';
+              body = `${marker}\n### Terraform plan\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`;
+            } else {
+              body = `${marker}\n### Terraform plan\n\n:warning: Plan failed - see the workflow logs.`;
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  # ---------------------------------------------------------------------------
+  # 3. Apply exactly the plan that was reviewed - never a freshly computed one.
+  # ---------------------------------------------------------------------------
+  apply:
+    name: terraform apply
+    needs: plan
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    outputs:
+      site_url: ${{ steps.outputs.outputs.site_url }}
+      static_web_app_name: ${{ steps.outputs.outputs.static_web_app_name }}
+      resource_group_name: ${{ steps.outputs.outputs.resource_group_name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: infra
+
+      - name: terraform init
+        run: |
+          terraform -chdir=infra init -input=false -no-color \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TF_STATE_KEY || 'app.tfstate' }}"
+
+      - name: terraform apply
+        run: terraform -chdir=infra apply -input=false -no-color -lock-timeout=5m tfplan
+
+      - name: Read outputs
+        id: outputs
+        run: |
+          echo "site_url=$(terraform -chdir=infra output -raw site_url)" >> "$GITHUB_OUTPUT"
+          echo "static_web_app_name=$(terraform -chdir=infra output -raw static_web_app_name)" >> "$GITHUB_OUTPUT"
+          echo "resource_group_name=$(terraform -chdir=infra output -raw resource_group_name)" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 4. Ship the site. The deployment token is fetched at runtime instead of
+  #    being stored as a repository secret.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: deploy site
+    needs: apply
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch deployment token
+        id: token
+        run: |
+          # The staticwebapp command lives in an az CLI extension.
+          az extension add --name staticwebapp --upgrade --only-show-errors
+          TOKEN=$(az staticwebapp secrets list \
+            --name "${{ needs.apply.outputs.static_web_app_name }}" \
+            --resource-group "${{ needs.apply.outputs.resource_group_name }}" \
+            --query "properties.apiKey" -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp commit SHA into the page
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          sed -i "s/__COMMIT_SHA__/${SHORT_SHA}/g" site/index.html
+          echo "Deploying ${SHORT_SHA}"
+
+      - name: Deploy to Azure Static Web Apps
+        uses: azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.token.outputs.token }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: site
+          skip_app_build: true
+          production_branch: main

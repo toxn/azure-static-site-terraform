@@ -1,0 +1,38 @@
+# ---- Terraform ----
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Lock files ARE committed on purpose (see README -> Reproducibility).
+
+# ---- Local variables (may contain personal values) ----
+terraform.tfvars
+*.auto.tfvars
+!*.tfvars.example
+
+# ---- Secrets / environment ----
+.env
+.env.*
+
+# ---- Editors & OS ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# ---- Node (only if you add a build step) ----
+node_modules/
+dist/

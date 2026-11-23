@@ -1,0 +1,21 @@
+output "id" {
+  value = azurerm_static_web_app.this.id
+}
+
+output "name" {
+  value = azurerm_static_web_app.this.name
+}
+
+output "default_host_name" {
+  value = azurerm_static_web_app.this.default_host_name
+}
+
+output "api_key" {
+  description = "Deployment token. Prefer fetching it at deploy time with `az staticwebapp secrets list`."
+  value       = azurerm_static_web_app.this.api_key
+  sensitive   = true
+}
+
+output "custom_domain" {
+  value = var.custom_domain
+}

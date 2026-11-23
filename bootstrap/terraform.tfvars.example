@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in your own values.
+# terraform.tfvars is git-ignored on purpose.
+
+github_owner = "your-github-username"
+github_repo  = "azure-static-site-terraform"
+
+project  = "demo"
+location = "eastus2"
+
+# Optional overrides
+# app_resource_group_name    = "rg-demo"
+# state_resource_group_name  = "rg-demo-tfstate"
+# state_storage_account_name = "stdemostateabc123"
